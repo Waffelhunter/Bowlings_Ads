@@ -1,0 +1,14 @@
+[Unit]
+Description=Ad Display Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/fabian/Documents/Bowling_stuff/CAS2
+ExecStart=/usr/bin/python3 /home/fabian/Documents/Bowling_stuff/CAS2/server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target 

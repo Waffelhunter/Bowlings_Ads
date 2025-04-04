@@ -1,0 +1,16 @@
+[Unit]
+Description=Ad Display Client
+After=network.target ad-server.service
+Requires=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/fabian/Documents/Bowling_stuff/CAS2
+# Replace SERVER_IP with the IP address of your server if not running on the same machine
+ExecStart=/usr/bin/python3 /home/fabian/Documents/Bowling_stuff/CAS2/client.py --server SERVER_IP
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target 

@@ -1,0 +1,15 @@
+# No external dependencies required for basic functionality
+# The system uses standard Python libraries:
+# - socket
+# - threading
+# - json
+# - argparse
+# - signal
+# - time
+# - datetime
+# - os
+# - sys
+# - random 
+
+# External dependencies
+Pillow==6.2.2  # For image display 
