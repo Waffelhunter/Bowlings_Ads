@@ -13,6 +13,7 @@ from PIL import Image, ImageTk
 import tkinter as tk
 import traceback  # For better error reporting
 import queue
+import binascii  # For printing hex values of serial data
 
 # Conditionally import serial - don't break if not available
 try:
@@ -158,9 +159,10 @@ class AdClient:
         # Create user input thread for local control
         self.input_thread = threading.Thread(target=self.handle_user_input, daemon=True)
 
-        # Serial port monitoring
+        # Serial port monitoring - enhanced with better device detection
         self.serial_port = None
         self.serial_thread = None
+        self.funk_keyboard_port = None  # Will store the discovered port path
 
     def connect(self):
         """Connect to the ad server"""
@@ -1002,7 +1004,8 @@ class AdClient:
         # Start user input thread for local control
         self.input_thread.start()
 
-        # Try to set up serial keyboard monitoring
+        # Try to find and set up serial keyboard monitoring with detailed port discovery
+        self.find_funk_keyboard()
         self.setup_serial_keyboard()
 
         # Keep the main thread alive
@@ -1012,6 +1015,44 @@ class AdClient:
         except KeyboardInterrupt:
             self.shutdown()
 
+    def find_funk_keyboard(self):
+        """Find the funk keyboard serial device by checking for the Prolific PL2303 adapter"""
+        if not SERIAL_AVAILABLE:
+            return
+
+        try:
+            print(f"CLIENT [{self.client_id}]: Searching for funk keyboard device...")
+
+            # Look for Prolific serial device on various buses
+            # First, look in common ttyUSB devices
+            possible_ports = []
+
+            # Check ttyUSB devices
+            for i in range(10):
+                port = f"/dev/ttyUSB{i}"
+                if os.path.exists(port):
+                    possible_ports.append(port)
+
+            # Check ttyS devices
+            for i in range(10):
+                port = f"/dev/ttyS{i}"
+                if os.path.exists(port):
+                    possible_ports.append(port)
+
+            if possible_ports:
+                print(
+                    f"CLIENT [{self.client_id}]: Found potential serial ports: {', '.join(possible_ports)}"
+                )
+                # Just use the first port for now - in production we could add more logic to identify exactly
+                self.funk_keyboard_port = possible_ports[0]
+                print(
+                    f"CLIENT [{self.client_id}]: Will use {self.funk_keyboard_port} for funk keyboard"
+                )
+            else:
+                print(f"CLIENT [{self.client_id}]: No potential serial ports found")
+        except Exception as e:
+            print(f"CLIENT [{self.client_id}]: Error searching for funk keyboard: {e}")
+
     def setup_serial_keyboard(self):
         """Set up monitoring for the serial keyboard device - safely handles failures"""
         if not SERIAL_AVAILABLE:
@@ -1020,38 +1061,33 @@ class AdClient:
             )
             return
 
-        # Try to find the Prolific serial device
+        if not self.funk_keyboard_port:
+            print(f"CLIENT [{self.client_id}]: No funk keyboard port identified")
+            return
+
+        # Try to connect to the identified port
         try:
-            # Common paths for the PL2303 device
-            potential_ports = ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyS0"]
-
-            # Try each port until we find one that works
-            for port in potential_ports:
-                try:
-                    if os.path.exists(port):
-                        self.serial_port = serial.Serial(port, 9600, timeout=1)
-                        print(
-                            f"CLIENT [{self.client_id}]: Connected to serial keyboard on {port}"
-                        )
-
-                        # Start a thread to monitor the serial port
-                        self.serial_thread = threading.Thread(
-                            target=self.monitor_serial_keyboard, daemon=True
-                        )
-                        self.serial_thread.start()
-                        return
-                except Exception as e:
-                    print(
-                        f"CLIENT [{self.client_id}]: Failed to connect to {port}: {e}"
-                    )
-                    continue
+            # Open serial port with a reasonable baud rate (9600 is common default)
+            self.serial_port = serial.Serial(
+                self.funk_keyboard_port,
+                baudrate=9600,
+                timeout=0.1,  # Short timeout for responsive reading
+            )
 
             print(
-                f"CLIENT [{self.client_id}]: No suitable serial port found for keyboard"
+                f"CLIENT [{self.client_id}]: Connected to funk keyboard on {self.funk_keyboard_port}"
             )
+
+            # Start a thread to monitor the serial port
+            self.serial_thread = threading.Thread(
+                target=self.monitor_serial_keyboard, daemon=True
+            )
+            self.serial_thread.start()
+
         except Exception as e:
-            print(f"CLIENT [{self.client_id}]: Error setting up serial keyboard: {e}")
+            print(f"CLIENT [{self.client_id}]: Failed to connect to funk keyboard: {e}")
             # Continue without serial support - don't break existing functionality
+            self.serial_port = None
 
     def monitor_serial_keyboard(self):
         """Monitor the serial keyboard for input and trigger idle mode"""
@@ -1059,40 +1095,54 @@ class AdClient:
             return
 
         try:
-            print(f"CLIENT [{self.client_id}]: Started monitoring serial keyboard")
+            print(f"CLIENT [{self.client_id}]: Started monitoring funk keyboard")
+
             while True:
                 try:
                     if self.serial_port.in_waiting > 0:
                         # Read data from the serial port
                         data = self.serial_port.read(self.serial_port.in_waiting)
+
                         if data:
-                            # If we got any data at all from the serial port, report it
+                            # Print the data in hex format for debugging
+                            hex_data = " ".join([f"{b:02x}" for b in data])
                             print(
-                                f"CLIENT [{self.client_id}]: Serial keyboard input detected: {data.hex()}"
+                                f"CLIENT [{self.client_id}]: Funk keyboard data detected: {hex_data}"
                             )
 
                             # Only trigger if not already in idle mode and currently playing
                             if not self.idle_mode and self.is_playing:
                                 print(
-                                    f"CLIENT [{self.client_id}]: Entering idle mode due to serial keyboard input"
+                                    f"CLIENT [{self.client_id}]: Entering idle mode due to funk keyboard activity"
                                 )
                                 # Use a thread to avoid blocking this loop
                                 threading.Thread(
                                     target=self.toggle_play_pause, daemon=True
                                 ).start()
+
+                                # Small delay to prevent multiple triggers from the same press
+                                time.sleep(0.5)
+
                 except Exception as e:
                     # If we encounter an error reading, log it but continue trying
                     print(
-                        f"CLIENT [{self.client_id}]: Error reading from serial port: {e}"
+                        f"CLIENT [{self.client_id}]: Error reading from funk keyboard: {e}"
                     )
                     time.sleep(1)  # Avoid tight loop if continuous errors
 
                 # Small sleep to prevent CPU hogging
-                time.sleep(0.1)
+                time.sleep(0.05)
+
         except Exception as e:
-            print(f"CLIENT [{self.client_id}]: Serial keyboard monitoring error: {e}")
+            print(f"CLIENT [{self.client_id}]: Funk keyboard monitoring error: {e}")
+
         finally:
-            print(f"CLIENT [{self.client_id}]: Stopped monitoring serial keyboard")
+            print(f"CLIENT [{self.client_id}]: Stopped monitoring funk keyboard")
+            if self.serial_port:
+                try:
+                    self.serial_port.close()
+                except:
+                    pass
 
     def toggle_play_pause(self):
         """Toggle between play and pause states locally"""
