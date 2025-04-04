@@ -14,6 +14,15 @@ import tkinter as tk
 import traceback  # For better error reporting
 import queue
 
+# Conditionally import serial - don't break if not available
+try:
+    import serial
+
+    SERIAL_AVAILABLE = True
+except ImportError:
+    SERIAL_AVAILABLE = False
+    print("PySerial not installed. Serial keyboard detection disabled.")
+
 # Global variables
 # Queue for GUI operations to be performed in the main thread
 gui_queue = queue.Queue()
@@ -148,6 +157,10 @@ class AdClient:
 
         # Create user input thread for local control
         self.input_thread = threading.Thread(target=self.handle_user_input, daemon=True)
+
+        # Serial port monitoring
+        self.serial_port = None
+        self.serial_thread = None
 
     def connect(self):
         """Connect to the ad server"""
@@ -958,6 +971,14 @@ class AdClient:
 
         print(f"CLIENT [{self.client_id}]: Shutting down...")
 
+        # Close serial port if open
+        if hasattr(self, "serial_port") and self.serial_port:
+            try:
+                self.serial_port.close()
+                print(f"CLIENT [{self.client_id}]: Closed serial port")
+            except:
+                pass
+
         # Close all windows
         self.close_image_window_force()
 
@@ -981,12 +1002,97 @@ class AdClient:
         # Start user input thread for local control
         self.input_thread.start()
 
+        # Try to set up serial keyboard monitoring
+        self.setup_serial_keyboard()
+
         # Keep the main thread alive
         try:
             while True:
                 time.sleep(1)
         except KeyboardInterrupt:
             self.shutdown()
+
+    def setup_serial_keyboard(self):
+        """Set up monitoring for the serial keyboard device - safely handles failures"""
+        if not SERIAL_AVAILABLE:
+            print(
+                f"CLIENT [{self.client_id}]: Serial keyboard detection disabled (PySerial not installed)"
+            )
+            return
+
+        # Try to find the Prolific serial device
+        try:
+            # Common paths for the PL2303 device
+            potential_ports = ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyS0"]
+
+            # Try each port until we find one that works
+            for port in potential_ports:
+                try:
+                    if os.path.exists(port):
+                        self.serial_port = serial.Serial(port, 9600, timeout=1)
+                        print(
+                            f"CLIENT [{self.client_id}]: Connected to serial keyboard on {port}"
+                        )
+
+                        # Start a thread to monitor the serial port
+                        self.serial_thread = threading.Thread(
+                            target=self.monitor_serial_keyboard, daemon=True
+                        )
+                        self.serial_thread.start()
+                        return
+                except Exception as e:
+                    print(
+                        f"CLIENT [{self.client_id}]: Failed to connect to {port}: {e}"
+                    )
+                    continue
+
+            print(
+                f"CLIENT [{self.client_id}]: No suitable serial port found for keyboard"
+            )
+        except Exception as e:
+            print(f"CLIENT [{self.client_id}]: Error setting up serial keyboard: {e}")
+            # Continue without serial support - don't break existing functionality
+
+    def monitor_serial_keyboard(self):
+        """Monitor the serial keyboard for input and trigger idle mode"""
+        if not self.serial_port:
+            return
+
+        try:
+            print(f"CLIENT [{self.client_id}]: Started monitoring serial keyboard")
+            while True:
+                try:
+                    if self.serial_port.in_waiting > 0:
+                        # Read data from the serial port
+                        data = self.serial_port.read(self.serial_port.in_waiting)
+                        if data:
+                            # If we got any data at all from the serial port, report it
+                            print(
+                                f"CLIENT [{self.client_id}]: Serial keyboard input detected: {data.hex()}"
+                            )
+
+                            # Only trigger if not already in idle mode and currently playing
+                            if not self.idle_mode and self.is_playing:
+                                print(
+                                    f"CLIENT [{self.client_id}]: Entering idle mode due to serial keyboard input"
+                                )
+                                # Use a thread to avoid blocking this loop
+                                threading.Thread(
+                                    target=self.toggle_play_pause, daemon=True
+                                ).start()
+                except Exception as e:
+                    # If we encounter an error reading, log it but continue trying
+                    print(
+                        f"CLIENT [{self.client_id}]: Error reading from serial port: {e}"
+                    )
+                    time.sleep(1)  # Avoid tight loop if continuous errors
+
+                # Small sleep to prevent CPU hogging
+                time.sleep(0.1)
+        except Exception as e:
+            print(f"CLIENT [{self.client_id}]: Serial keyboard monitoring error: {e}")
+        finally:
+            print(f"CLIENT [{self.client_id}]: Stopped monitoring serial keyboard")
 
     def toggle_play_pause(self):
         """Toggle between play and pause states locally"""
