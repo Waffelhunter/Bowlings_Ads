@@ -47,6 +47,8 @@ def setup_gui_thread():
         try:
             # Create the main root window (invisible)
             root = tk.Tk()
+            # fullscreen
+            root.attributes("-fullscreen", True)
             root.withdraw()
 
             # Set a flag that the GUI thread is running
@@ -655,7 +657,7 @@ class AdClient:
             )
 
             # Resize if the image is too large
-            max_width, max_height = 800, 600
+            max_width, max_height = 3000, 2500
             width, height = img.size
             if width > max_width or height > max_height:
                 ratio = min(max_width / width, max_height / height)
@@ -674,6 +676,7 @@ class AdClient:
                     )
                     # Create a new toplevel window
                     image_window = tk.Toplevel(root)
+                    image_window.attributes("-fullscreen", True)
                     windows.append(image_window)  # Keep track of all windows
 
                     image_window.title(f"Ad Display - {self.client_id} - {title}")
@@ -694,8 +697,32 @@ class AdClient:
                     # Ensure event handlers are bound
                     self.bind_window_events(image_window, image_label)
 
+                # Get screen dimensions for proper scaling
+                screen_width = image_window.winfo_screenwidth()
+                screen_height = image_window.winfo_screenheight()
+
+                # Scale image to fit the screen while maintaining aspect ratio
+                img_width, img_height = img.size
+                # Calculate scaling factors for both dimensions
+                width_ratio = screen_width / img_width
+                height_ratio = screen_height / img_height
+
+                # Use the smaller ratio to ensure image fits fully on screen
+                # For fullscreen filling, use the larger ratio
+                scale_ratio = max(width_ratio, height_ratio)
+
+                # Calculate new dimensions
+                new_width = int(img_width * scale_ratio)
+                new_height = int(img_height * scale_ratio)
+
+                # Resize the image to fill the screen
+                resized_img = img.resize((new_width, new_height), Image.LANCZOS)
+                print(
+                    f"CLIENT [{self.client_id}]: Fullscreen scaled image to {new_width}x{new_height} (screen: {screen_width}x{screen_height})"
+                )
+
                 # Convert image for display
-                tk_img = ImageTk.PhotoImage(img)
+                tk_img = ImageTk.PhotoImage(resized_img)
 
                 # Update the image
                 image_label.configure(image=tk_img)
